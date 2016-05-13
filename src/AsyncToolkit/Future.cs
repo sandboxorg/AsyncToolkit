@@ -10,12 +10,25 @@ using System.Threading.Tasks;
 
 namespace AsyncToolkit
 {
+    public interface IFuture
+    {
+        bool IsCompleted { get; }
+        bool IsCanceled { get; }
+        bool IsSucceeded { get; }
+        bool IsFailed { get; }
+        Exception Exception { get; }
+        void ThrowIfFailed();
+
+        Future ToFuture();
+        Future<T> ToFuture<T>();
+    }
+
     [StructLayout(LayoutKind.Auto)]
-    public struct Future<T> : IEquatable<Future<T>>
+    public struct Future<T> : IEquatable<Future<T>>, IFuture
     {
         #region Nested Types
 
-        public struct FutureAwaiter : INotifyCompletion
+        public struct FutureAwaiter : ICriticalNotifyCompletion
         {
             private Future<T> _future;
 
@@ -28,12 +41,13 @@ namespace AsyncToolkit
 
             public T GetResult() => _future.Value;
 
-            /// <summary>
-            /// Not intended to be called directly.
-            /// This method does not flow the ExecutionContext,
-            /// but awaiting the future will flow the ExecutionContext as expected.
-            /// </summary>
             public void OnCompleted(Action continuation)
+            {
+                //TODO Capture ExecutionContext
+                UnsafeOnCompleted(continuation);
+            }
+
+            public void UnsafeOnCompleted(Action continuation)
             {
                 var promise = _future.GetPromise();
 
@@ -49,9 +63,10 @@ namespace AsyncToolkit
             }
         }
 
-        public struct ScheduledFutureAwaiter
+        [SuppressMessage("ReSharper", "ImpureMethodCallOnReadonlyValueField", Justification = "The calls do not alter the readonly field")]
+        public struct ScheduledFutureAwaiter : ICriticalNotifyCompletion
         {
-            private Future<T> _future;
+            private readonly Future<T> _future;
             private readonly FutureScheduler _scheduler;
             private readonly bool _synchronousIfCompleted;
 
@@ -66,12 +81,13 @@ namespace AsyncToolkit
 
             public T GetResult() => _future.Value;
 
-            /// <summary>
-            /// Not intended to be called directly.
-            /// This method does not flow the ExecutionContext,
-            /// but awaiting the future will flow the ExecutionContext as expected.
-            /// </summary>
             public void OnCompleted(Action continuation)
+            {
+                //TODO Capture ExecutionContext
+                UnsafeOnCompleted(continuation);
+            }
+
+            public void UnsafeOnCompleted(Action continuation)
             {
                 var promise = _future.GetPromise();
 
@@ -96,7 +112,7 @@ namespace AsyncToolkit
 
         public struct ScheduledFutureAwaitable
         {
-            private Future<T> _future;
+            private readonly Future<T> _future;
             private readonly FutureScheduler _scheduler;
             private readonly bool _synchronousIfCompleted;
 
@@ -116,13 +132,15 @@ namespace AsyncToolkit
         #endregion
 
         private readonly Promise<T> _promise;
-
-        // Not readonly because _value could be a mutable struct (Would be bad practice but... could happen)
-        private T _value;
+        private readonly T _value;
 
         public bool IsCompleted => _promise == null || _promise.IsCompleted;
 
         public bool IsCanceled => _promise != null && _promise.IsCanceled;
+
+        public bool IsSucceeded => _promise == null || _promise.IsSucceeded;
+
+        public bool IsFailed => _promise != null && _promise.IsFailed;
 
         public T Value
         {
@@ -136,9 +154,6 @@ namespace AsyncToolkit
         }
 
         public Exception Exception => _promise?.Exception;
-
-        public bool IsSucceeded => Exception == null;
-        public bool IsFailed => Exception != null;
 
         internal Future(T value)
         {
@@ -212,6 +227,19 @@ namespace AsyncToolkit
             _promise?.ThrowIfFailed();
         }
 
+        Future IFuture.ToFuture()
+        {
+            return this;
+        }
+
+        Future<TCast> IFuture.ToFuture<TCast>()
+        {
+            if (typeof(T) != typeof(TCast))
+                throw new InvalidOperationException($"Can't cast Future<{typeof(T).Name}> into Future<{typeof(TCast).Name}>.");
+
+            return (Future<TCast>)(Future)this;
+        }
+
         public static implicit operator Future(Future<T> future)
         {
             return future._promise != null ? new Future(future._promise) : new Future(future._value);
@@ -224,7 +252,7 @@ namespace AsyncToolkit
 
         #region Equality members
 
-        [SuppressMessage("ReSharper", "NonReadonlyMemberInGetHashCode")]
+        [SuppressMessage("ReSharper", "NonReadonlyMemberInGetHashCode", Justification = "The field can't be readonly but it's not changed.")]
         public override int GetHashCode()
         {
             if (_promise != null)
@@ -271,7 +299,7 @@ namespace AsyncToolkit
         #endregion
     }
 
-    public struct Future : IEquatable<Future>
+    public struct Future : IEquatable<Future>, IFuture
     {
         #region Static Helpers
 
@@ -415,9 +443,10 @@ namespace AsyncToolkit
 
         #region Nested Types
 
-        public struct FutureAwaiter : INotifyCompletion
+        [SuppressMessage("ReSharper", "ImpureMethodCallOnReadonlyValueField", Justification = "The calls do not alter the readonly field")]
+        public struct FutureAwaiter : ICriticalNotifyCompletion
         {
-            private Future _future;
+            private readonly Future _future;
 
             public bool IsCompleted => _future.IsCompleted;
 
@@ -428,12 +457,13 @@ namespace AsyncToolkit
 
             public void GetResult() => _future.ThrowIfFailed();
 
-            /// <summary>
-            /// Not intended to be called directly.
-            /// This method does not flow the ExecutionContext,
-            /// but awaiting the future will flow the ExecutionContext as expected.
-            /// </summary>
             public void OnCompleted(Action continuation)
+            {
+                //TODO Capture ExecutionContext
+                UnsafeOnCompleted(continuation);
+            }
+
+            public void UnsafeOnCompleted(Action continuation)
             {
                 var promise = _future.GetPromise();
 
@@ -449,7 +479,7 @@ namespace AsyncToolkit
             }
         }
 
-        public struct ScheduledFutureAwaiter
+        public struct ScheduledFutureAwaiter : ICriticalNotifyCompletion
         {
             private Future _future;
             private readonly FutureScheduler _scheduler;
@@ -466,12 +496,13 @@ namespace AsyncToolkit
 
             public void GetResult() => _future.ThrowIfFailed();
 
-            /// <summary>
-            /// Not intended to be called directly.
-            /// This method does not flow the ExecutionContext,
-            /// but awaiting the future will flow the ExecutionContext as expected.
-            /// </summary>
             public void OnCompleted(Action continuation)
+            {
+                //TODO Capture ExecutionContext
+                UnsafeOnCompleted(continuation);
+            }
+
+            public void UnsafeOnCompleted(Action continuation)
             {
                 var promise = _future.GetPromise();
 
@@ -570,6 +601,16 @@ namespace AsyncToolkit
             _promise?.ThrowIfFailed();
         }
 
+        Future IFuture.ToFuture()
+        {
+            return this;
+        }
+
+        Future<TCast> IFuture.ToFuture<TCast>()
+        {
+            return ToFutureOf<TCast>();
+        }
+
         internal Future<T> ToFutureOf<T>()
         {
             return _promise != null ? new Future<T>((Promise<T>)_promise) : new Future<T>((T)_value);
@@ -587,7 +628,11 @@ namespace AsyncToolkit
 
         public override bool Equals(object obj)
         {
-            return obj is Future && Equals((Future)obj);
+            var future = obj as IFuture;
+            if (future != null)
+                return Equals(future.ToFuture());
+
+            return false;
         }
 
         public bool Equals(Future other)
